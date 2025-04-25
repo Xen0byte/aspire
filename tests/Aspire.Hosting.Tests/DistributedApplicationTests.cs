@@ -1011,11 +1011,13 @@ public class DistributedApplicationTests
             {
                 using var client = new HttpClient();
                 var value = await client.GetStringAsync($"{httpsEndpoint}urls", token).DefaultTimeout();
+                _testOutputHelper.WriteLine($"For https url got {value}");
                 Assert.Equal(urls, value);
                 break;
             }
             catch (Exception ex) when (ex is not EqualException)
             {
+                _testOutputHelper.WriteLine($"Exception {ex} while trying to get https url");
                 await Task.Delay(100, token);
             }
         }
