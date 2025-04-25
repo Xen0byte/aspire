@@ -952,6 +952,7 @@ public class DistributedApplicationTests
     }
 
     [Fact]
+    [RequiresSSLCertificate]
     [QuarantinedTest("https://github.com/dotnet/aspire/issues/4599")]
     public async Task ProxylessAndProxiedEndpointBothWorkOnSameResource()
     {
