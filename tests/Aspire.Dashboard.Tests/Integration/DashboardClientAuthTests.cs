@@ -16,7 +16,6 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 using DashboardServiceBase = Aspire.ResourceService.Proto.V1.DashboardService.DashboardServiceBase;
@@ -43,7 +42,7 @@ public sealed class DashboardClientAuthTests
         await using var server = await CreateResourceServiceServerAsync(loggerFactory, useHttps).DefaultTimeout();
         await using var client = await CreateDashboardClientAsync(loggerFactory, server.Url, authMode: ResourceClientAuthMode.Unsecured).DefaultTimeout();
 
-        var call = await server.Calls.ApplicationInformationCallsChannel.Reader.ReadAsync().DefaultTimeout();
+        var call = await server.Calls.ApplicationInformationCallsChannel.Reader.ReadAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         Assert.NotNull(call.Request);
         Assert.NotNull(call.RequestHeaders);
@@ -59,7 +58,7 @@ public sealed class DashboardClientAuthTests
         await using var server = await CreateResourceServiceServerAsync(loggerFactory, useHttps).DefaultTimeout();
         await using var client = await CreateDashboardClientAsync(loggerFactory, server.Url, authMode: ResourceClientAuthMode.ApiKey, configureOptions: options => options.ResourceServiceClient.ApiKey = "TestApiKey!").DefaultTimeout();
 
-        var call = await server.Calls.ApplicationInformationCallsChannel.Reader.ReadAsync().DefaultTimeout();
+        var call = await server.Calls.ApplicationInformationCallsChannel.Reader.ReadAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         Assert.NotNull(call.Request);
         Assert.NotNull(call.RequestHeaders);
@@ -130,8 +129,6 @@ public sealed class DashboardClientAuthTests
             loggerFactory: loggerFactory,
             configuration: new ConfigurationManager(),
             dashboardOptions: Options.Create(options),
-            dashboardClientStatus: new TestDashboardClientStatus(),
-            timeProvider: new BrowserTimeProvider(NullLoggerFactory.Instance),
             knownPropertyLookup: new MockKnownPropertyLookup(),
             configureHttpHandler: handler => handler.SslOptions.RemoteCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) => true);
 
@@ -158,11 +155,6 @@ public sealed class DashboardClientAuthTests
     private sealed class TestCalls
     {
         public Channel<ReceivedCallInfo<ApplicationInformationRequest>> ApplicationInformationCallsChannel { get; } = Channel.CreateUnbounded<ReceivedCallInfo<ApplicationInformationRequest>>();
-    }
-
-    private sealed class TestDashboardClientStatus : IDashboardClientStatus
-    {
-        public bool IsEnabled => true;
     }
 
     private sealed class MockDashboardService(TestCalls testCalls) : DashboardServiceBase

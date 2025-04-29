@@ -16,8 +16,6 @@ namespace Aspire.Dashboard.Tests.Model;
 
 public sealed class DashboardClientTests
 {
-    private static readonly BrowserTimeProvider s_timeProvider = new(NullLoggerFactory.Instance);
-
     private readonly IConfiguration _configuration;
     private readonly IOptions<DashboardOptions> _dashboardOptions;
 
@@ -59,7 +57,7 @@ public sealed class DashboardClientTests
             await foreach (var item in subscription.WithCancellation(cts.Token))
             {
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         cts.Cancel();
 
@@ -87,7 +85,7 @@ public sealed class DashboardClientTests
             await foreach (var item in subscription)
             {
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         await instance.DisposeAsync().DefaultTimeout();
 
@@ -152,11 +150,6 @@ public sealed class DashboardClientTests
 
     private DashboardClient CreateResourceServiceClient()
     {
-        return new DashboardClient(NullLoggerFactory.Instance, _configuration, _dashboardOptions, new TestDashboardClientStatus(), s_timeProvider, new MockKnownPropertyLookup());
-    }
-
-    private sealed class TestDashboardClientStatus : IDashboardClientStatus
-    {
-        public bool IsEnabled => true;
+        return new DashboardClient(NullLoggerFactory.Instance, _configuration, _dashboardOptions, new MockKnownPropertyLookup());
     }
 }

@@ -2,10 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Nodes;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Otlp.Http;
 using Aspire.Hosting;
+using Aspire.Tests.Shared.Telemetry;
 using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.InternalTesting;
@@ -36,7 +38,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             });
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert
         Assert.Collection(app.FrontendEndPointsAccessor,
@@ -68,7 +70,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             });
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert,
         Assert.Collection(app.FrontendEndPointsAccessor,
@@ -206,7 +208,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             var initialBrowserTokenProvidedByConfiguration = localBuilder?.Configuration[DashboardConfigNames.DashboardFrontendBrowserTokenName.ConfigKey];
 
             // update the browser token's config file and get the new value
-            await File.WriteAllTextAsync(browserTokenConfigFile, changedFrontendBrowserToken).DefaultTimeout();
+            await File.WriteAllTextAsync(browserTokenConfigFile, changedFrontendBrowserToken, TestContext.Current.CancellationToken).DefaultTimeout();
 
             // Assert
             Assert.Equal(initialFrontendBrowserToken, initialBrowserTokenProvidedByConfiguration);
@@ -255,11 +257,40 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             });
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert
         Assert.Equal(OtlpAuthMode.ApiKey, app.DashboardOptionsMonitor.CurrentValue.Otlp.AuthMode);
         Assert.Equal("TestKey123!", app.DashboardOptionsMonitor.CurrentValue.Otlp.PrimaryApiKey);
+    }
+
+    [Fact]
+    public async Task Configuration_OptionsMonitor_DebugSession()
+    {
+        // Arrange
+        var testCert = TelemetryTestHelpers.GenerateDummyCertificate();
+
+        await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(testOutputHelper,
+            additionalConfiguration: initialData =>
+            {
+                initialData[DashboardConfigNames.DebugSessionPortName.ConfigKey] = "8080";
+                initialData[DashboardConfigNames.DebugSessionServerCertificateName.ConfigKey] = Convert.ToBase64String(testCert.Export(X509ContentType.Cert));
+                initialData[DashboardConfigNames.DebugSessionTokenName.ConfigKey] = "token!";
+                initialData[DashboardConfigNames.DebugSessionTelemetryOptOutName.ConfigKey] = "true";
+            });
+
+        // Act
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
+
+        // Assert
+        Assert.Equal(8080, app.DashboardOptionsMonitor.CurrentValue.DebugSession.Port);
+
+        var cert = app.DashboardOptionsMonitor.CurrentValue.DebugSession.GetServerCertificate();
+        Assert.NotNull(cert);
+        Assert.Equal(testCert.Thumbprint, cert.Thumbprint);
+
+        Assert.Equal("token!", app.DashboardOptionsMonitor.CurrentValue.DebugSession.Token);
+        Assert.Equal(true, app.DashboardOptionsMonitor.CurrentValue.DebugSession.TelemetryOptOut);
     }
 
     [Fact]
@@ -299,13 +330,13 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
                 BaseAddress = new Uri($"https://{app.FrontendSingleEndPointAccessor().EndPoint}")
             };
             var request = new HttpRequestMessage(HttpMethod.Get, "/");
-            var response = await httpClient.SendAsync(request).DefaultTimeout();
+            var response = await httpClient.SendAsync(request, TestContext.Current.CancellationToken).DefaultTimeout();
             response.EnsureSuccessStatusCode();
 
             // Check OTLP service
             using var channel = IntegrationTestHelpers.CreateGrpcChannel($"https://{app.FrontendSingleEndPointAccessor().EndPoint}", testOutputHelper);
             var client = new LogsService.LogsServiceClient(channel);
-            var serviceResponse = await client.ExportAsync(new ExportLogsServiceRequest()).ResponseAsync.DefaultTimeout();
+            var serviceResponse = await client.ExportAsync(new ExportLogsServiceRequest(), cancellationToken: TestContext.Current.CancellationToken).ResponseAsync.DefaultTimeout();
             Assert.Equal(0, serviceResponse.PartialSuccess.RejectedLogRecords);
         }
         finally
@@ -400,17 +431,17 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
                 BaseAddress = new Uri($"http://{app.FrontendSingleEndPointAccessor().EndPoint}")
             };
             var request = new HttpRequestMessage(HttpMethod.Get, "/");
-            var responseMessage = await httpClient.SendAsync(request).DefaultTimeout();
+            var responseMessage = await httpClient.SendAsync(request, TestContext.Current.CancellationToken).DefaultTimeout();
             responseMessage.EnsureSuccessStatusCode();
 
             // Check OTLP service
             using var content = new ByteArrayContent(new ExportLogsServiceRequest().ToByteArray());
             content.Headers.TryAddWithoutValidation("content-type", OtlpHttpEndpointsBuilder.ProtobufContentType);
 
-            responseMessage = await httpClient.PostAsync("/v1/logs", content);
+            responseMessage = await httpClient.PostAsync("/v1/logs", content, TestContext.Current.CancellationToken);
             responseMessage.EnsureSuccessStatusCode();
 
-            var response = ExportLogsServiceResponse.Parser.ParseFrom(await responseMessage.Content.ReadAsByteArrayAsync().DefaultTimeout());
+            var response = ExportLogsServiceResponse.Parser.ParseFrom(await responseMessage.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken).DefaultTimeout());
 
             Assert.Equal(OtlpHttpEndpointsBuilder.ProtobufContentType, responseMessage.Content.Headers.GetValues("content-type").Single());
             Assert.False(responseMessage.Headers.Contains("content-security-policy"));
@@ -454,7 +485,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             });
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert
         Assert.Equal(FrontendAuthMode.Unsecured, app.DashboardOptionsMonitor.CurrentValue.Frontend.AuthMode);
@@ -495,13 +526,13 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             clearLogFilterRules: false);
 
         // Assert
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         var options = app.Services.GetRequiredService<IOptions<LoggerFilterOptions>>();
 
-        Assert.Single(options.Value.Rules.Where(r => r.CategoryName == null && r.LogLevel == LogLevel.Trace));
-        Assert.Single(options.Value.Rules.Where(r => r.CategoryName == "Grpc" && r.LogLevel == LogLevel.Trace));
-        Assert.Single(options.Value.Rules.Where(r => r.CategoryName == "Microsoft.Hosting.Lifetime" && r.LogLevel == LogLevel.Trace));
+        Assert.Single(options.Value.Rules, r => r.CategoryName is null && r.LogLevel == LogLevel.Trace);
+        Assert.Single(options.Value.Rules, r => r.CategoryName == "Grpc" && r.LogLevel == LogLevel.Trace);
+        Assert.Single(options.Value.Rules, r => r.CategoryName == "Microsoft.Hosting.Lifetime" && r.LogLevel == LogLevel.Trace);
     }
 
     [Theory]
@@ -523,7 +554,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
                 }
             }
         };
-        await File.WriteAllTextAsync(configFilePath, configJson.ToString()).DefaultTimeout();
+        await File.WriteAllTextAsync(configFilePath, configJson.ToString(), TestContext.Current.CancellationToken).DefaultTimeout();
 
         try
         {
@@ -536,13 +567,13 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
                 clearLogFilterRules: false);
 
             // Assert
-            await app.StartAsync().DefaultTimeout();
+            await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
             var options = app.Services.GetRequiredService<IOptions<LoggerFilterOptions>>();
 
-            Assert.Single(options.Value.Rules.Where(r => r.CategoryName == null && r.LogLevel == LogLevel.Trace));
-            Assert.Single(options.Value.Rules.Where(r => r.CategoryName == "Grpc" && r.LogLevel == LogLevel.Trace));
-            Assert.Single(options.Value.Rules.Where(r => r.CategoryName == "Microsoft.Hosting.Lifetime" && r.LogLevel == LogLevel.Trace));
+            Assert.Single(options.Value.Rules, r => r.CategoryName is null && r.LogLevel == LogLevel.Trace);
+            Assert.Single(options.Value.Rules, r => r.CategoryName == "Grpc" && r.LogLevel == LogLevel.Trace);
+            Assert.Single(options.Value.Rules, r => r.CategoryName == "Microsoft.Hosting.Lifetime" && r.LogLevel == LogLevel.Trace);
         }
         finally
         {
@@ -558,7 +589,7 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
         await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(testOutputHelper, testSink: testSink);
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert
         var l = testSink.Writes.Where(w => w.LoggerName == typeof(DashboardWebApplication).FullName).ToList();
@@ -690,12 +721,12 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
         await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(testOutputHelper);
 
         // Act
-        await app.StartAsync().DefaultTimeout();
+        await app.StartAsync(TestContext.Current.CancellationToken).DefaultTimeout();
 
         using var client = new HttpClient { BaseAddress = new Uri($"http://{app.FrontendSingleEndPointAccessor().EndPoint}") };
 
         // Act
-        var response = await client.GetAsync("/").DefaultTimeout();
+        var response = await client.GetAsync("/", TestContext.Current.CancellationToken).DefaultTimeout();
 
         // Assert
         response.EnsureSuccessStatusCode();
