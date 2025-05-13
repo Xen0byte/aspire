@@ -8,9 +8,22 @@
 //------------------------------------------------------------------------------
 namespace Aspire.Hosting
 {
+    public partial class AzureBlobStorageContainerResource : ApplicationModel.Resource, ApplicationModel.IResourceWithConnectionString, ApplicationModel.IResource, ApplicationModel.IManifestExpressionProvider, ApplicationModel.IValueProvider, ApplicationModel.IValueWithReferences, ApplicationModel.IResourceWithParent<Azure.AzureBlobStorageResource>, ApplicationModel.IResourceWithParent
+    {
+        public AzureBlobStorageContainerResource(string name, string blobContainerName, Azure.AzureBlobStorageResource parent) : base(default!) { }
+
+        public string BlobContainerName { get { throw null; } }
+
+        public ApplicationModel.ReferenceExpression ConnectionStringExpression { get { throw null; } }
+
+        public Azure.AzureBlobStorageResource Parent { get { throw null; } }
+    }
+
     public static partial class AzureStorageExtensions
     {
         public static ApplicationModel.IResourceBuilder<Azure.AzureStorageResource> AddAzureStorage(this IDistributedApplicationBuilder builder, string name) { throw null; }
+
+        public static ApplicationModel.IResourceBuilder<AzureBlobStorageContainerResource> AddBlobContainer(this ApplicationModel.IResourceBuilder<Azure.AzureBlobStorageResource> builder, string name, string? blobContainerName = null) { throw null; }
 
         public static ApplicationModel.IResourceBuilder<Azure.AzureBlobStorageResource> AddBlobs(this ApplicationModel.IResourceBuilder<Azure.AzureStorageResource> builder, string name) { throw null; }
 
