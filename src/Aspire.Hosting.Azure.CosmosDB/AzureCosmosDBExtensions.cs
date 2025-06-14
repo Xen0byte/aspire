@@ -116,7 +116,9 @@ public static class AzureCosmosExtensions
 
                 foreach (var container in database.Containers)
                 {
-                    await db.CreateContainerIfNotExistsAsync(container.ContainerName, container.PartitionKeyPath, cancellationToken: ct).ConfigureAwait(false);
+                    var containerProperties = container.ContainerProperties;
+
+                    await db.CreateContainerIfNotExistsAsync(containerProperties, cancellationToken: ct).ConfigureAwait(false);
                 }
             }
         });
@@ -280,6 +282,51 @@ public static class AzureCosmosExtensions
     }
 
     /// <summary>
+    /// Adds a container to the associated Cosmos DB database resource with hierarchical partition keys.
+    /// </summary>
+    /// <param name="builder">CosmosDBDatabase resource builder.</param>
+    /// <param name="name">Name of container resource.</param>
+    /// <param name="partitionKeyPaths">Hierarchical partition key paths for the container.</param>
+    /// <param name="containerName">The name of the container. If not provided, this defaults to the same value as <paramref name="name"/>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    public static IResourceBuilder<AzureCosmosDBContainerResource> AddContainer(this IResourceBuilder<AzureCosmosDBDatabaseResource> builder, [ResourceName] string name, IEnumerable<string> partitionKeyPaths, string? containerName = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(partitionKeyPaths);
+        var partitionKeyPathsArray = partitionKeyPaths.ToArray();
+        if (partitionKeyPathsArray.Length == 0)
+        {
+            throw new ArgumentException("At least one partition key path should be provided.", nameof(partitionKeyPaths));
+        }
+
+        if (partitionKeyPathsArray.Any(string.IsNullOrEmpty))
+        {
+            throw new ArgumentException("Partition key paths cannot contain null or empty strings.", nameof(partitionKeyPaths));
+        }
+
+        // Use the resource name as the container name if it's not provided
+        containerName ??= name;
+
+        var container = new AzureCosmosDBContainerResource(name, containerName, partitionKeyPaths, builder.Resource);
+
+        builder.Resource.Containers.Add(container);
+
+        return builder.ApplicationBuilder.AddResource(container);
+    }
+
+    /// <summary>
+    /// Configures the Azure Cosmos DB resource to be deployed use the default SKU provided by Azure.
+    /// </summary>
+    /// <param name="builder">The builder for the Azure Cosmos DB resource.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
+    public static IResourceBuilder<AzureCosmosDBResource> WithDefaultAzureSku(this IResourceBuilder<AzureCosmosDBResource> builder)
+    {
+        builder.Resource.UseDefaultAzureSku = true;
+        return builder;
+    }
+
+    /// <summary>
     /// Configures the Azure Cosmos DB preview emulator to expose the Data Explorer endpoint.
     /// </summary>
     /// <param name="builder">Builder for the Cosmos emulator container</param>
@@ -373,10 +420,7 @@ public static class AzureCosmosExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         var azureResource = builder.Resource;
-        azureResource.ConnectionStringSecretOutput = keyVaultBuilder.Resource.GetSecret(
-            $"connectionstrings--{azureResource.Name}");
-
-        builder.WithParameter(AzureBicepResource.KnownParameters.KeyVaultName, keyVaultBuilder.Resource.NameOutputReference);
+        azureResource.ConnectionStringSecretOutput = keyVaultBuilder.Resource.GetSecret($"connectionstrings--{azureResource.Name}");
 
         // remove role assignment annotations when using access key authentication so an empty roles bicep module isn't generated
         var roleAssignmentAnnotations = azureResource.Annotations.OfType<DefaultRoleAssignmentsAnnotation>().ToArray();
@@ -403,6 +447,10 @@ public static class AzureCosmosExtensions
             (infrastructure) => new CosmosDBAccount(infrastructure.AspireResource.GetBicepIdentifier())
             {
                 Kind = CosmosDBAccountKind.GlobalDocumentDB,
+                Capabilities = azureResource.UseDefaultAzureSku ? [] : new BicepList<CosmosDBAccountCapability>
+                {
+                    new CosmosDBAccountCapability { Name = CosmosConstants.EnableServerlessCapability }
+                },
                 ConsistencyPolicy = new ConsistencyPolicy()
                 {
                     DefaultConsistencyLevel = DefaultConsistencyLevel.Session
@@ -442,17 +490,26 @@ public static class AzureCosmosExtensions
                     Resource = new CosmosDBSqlContainerResourceInfo()
                     {
                         ContainerName = container.ContainerName,
-                        PartitionKey = new CosmosDBContainerPartitionKey { Paths = [container.PartitionKeyPath] }
+                        PartitionKey = new CosmosDBContainerPartitionKey
+                        {
+                            Paths = [.. container.PartitionKeyPaths],
+                            Kind = container.PartitionKeyPaths.Count > 1 ? CosmosDBPartitionKind.MultiHash : CosmosDBPartitionKind.Hash,
+                        }
                     }
                 };
+
+                if (container.ContainerProperties.PartitionKeyDefinitionVersion is { } version)
+                {
+                    cosmosContainer.Resource.PartitionKey.Version = (int)version;
+                }
+
                 infrastructure.Add(cosmosContainer);
             }
         }
 
         if (azureResource.UseAccessKeyAuthentication)
         {
-            var kvNameParam = new ProvisioningParameter(AzureBicepResource.KnownParameters.KeyVaultName, typeof(string));
-            infrastructure.Add(kvNameParam);
+            var kvNameParam = azureResource.ConnectionStringSecretOutput.Resource.NameOutputReference.AsProvisioningParameter(infrastructure);
 
             var keyVault = KeyVaultService.FromExisting("keyVault");
             keyVault.Name = kvNameParam;
