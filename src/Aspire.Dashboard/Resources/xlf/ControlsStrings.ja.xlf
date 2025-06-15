@@ -72,11 +72,6 @@
         <target state="translated">カーディナリティ制限が検出されました</target>
         <note />
       </trans-unit>
-      <trans-unit id="ChartContainerSelectFilters">
-        <source>Select filters</source>
-        <target state="translated">フィルターの選択</target>
-        <note />
-      </trans-unit>
       <trans-unit id="ChartContainerShowCountLabel">
         <source>Show count</source>
         <target state="translated">カウントの表示</target>
@@ -232,6 +227,11 @@
         <target state="translated">値の表示</target>
         <note />
       </trans-unit>
+      <trans-unit id="HideHiddenResources">
+        <source>Hide hidden resources</source>
+        <target state="new">Hide hidden resources</target>
+        <note />
+      </trans-unit>
       <trans-unit id="LabelAll">
         <source>(All)</source>
         <target state="translated">(すべて)</target>
@@ -247,10 +247,10 @@
         <target state="translated">(なし)</target>
         <note />
       </trans-unit>
-      <trans-unit id="LabelUnset">
+      <trans-unit id="LabelValueUnset">
         <source>(Unset)</source>
-        <target state="translated">(設定解除)</target>
-        <note />
+        <target state="new">(Unset)</target>
+        <note>Unset is a noun, not a verb, to indicate that the value has not been set.</note>
       </trans-unit>
       <trans-unit id="LinkAddressColumnHeader">
         <source>Address</source>
@@ -275,11 +275,6 @@
       <trans-unit id="MetricTableNoMetricsFound">
         <source>No metrics data found</source>
         <target state="translated">メトリック データが見つかりません</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="MetricTableShowLatestValues">
-        <source>Show latest 10 values</source>
-        <target state="translated">最新の 10 個の値を表示する</target>
         <note />
       </trans-unit>
       <trans-unit id="MetricTableShowOnlyValueChanges">
@@ -432,6 +427,11 @@
         <target state="translated">アプリケーションを選択する</target>
         <note />
       </trans-unit>
+      <trans-unit id="ShowHiddenResources">
+        <source>Show hidden resources</source>
+        <target state="new">Show hidden resources</target>
+        <note />
+      </trans-unit>
       <trans-unit id="SpanDetailsBacklinksHeader">
         <source>Backlinks</source>
         <target state="translated">バックリンク</target>
@@ -497,21 +497,6 @@
         <target state="translated">状態</target>
         <note />
       </trans-unit>
-      <trans-unit id="StructuredFilteringAddFilter">
-        <source>Add filter</source>
-        <target state="translated">フィルターの追加</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="StructuredFilteringFilters">
-        <source>Filters</source>
-        <target state="translated">フィルター</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="StructuredFilteringNoFilters">
-        <source>No filters</source>
-        <target state="translated">フィルターなし</target>
-        <note />
-      </trans-unit>
       <trans-unit id="StructuredLogsDetailsContextHeader">
         <source>Context</source>
         <target state="translated">コンテキスト</target>
@@ -555,11 +540,6 @@
       <trans-unit id="ToggleNesting">
         <source>Toggle nesting</source>
         <target state="translated">入れ子の切り替え</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="TraceDetailAttributesHeader">
-        <source>Attributes</source>
-        <target state="translated">属性</target>
         <note />
       </trans-unit>
       <trans-unit id="ViewAction">

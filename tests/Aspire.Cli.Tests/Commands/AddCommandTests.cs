@@ -15,7 +15,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task AddCommandWithHelpArgumentReturnsZero()
     {
-        var services = CliTestHelper.CreateServiceCollection(outputHelper);
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<RootCommand>();
@@ -28,7 +29,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task AddCommandInteractiveFlowSmokeTest()
     {
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -70,7 +72,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     // Simulate adding the package.
                     return 0; // Success.
@@ -93,7 +95,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     {
         IEnumerable<(string FriendlyName, NuGetPackage Package)>? promptedPackages = null;
         
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -136,7 +139,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     // Simulate adding the package.
                     return 0; // Success.
@@ -164,7 +167,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     {
         IEnumerable<(string FriendlyName, NuGetPackage Package)>? promptedPackages = null;
         
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -214,7 +218,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     // Simulate adding the package.
                     return 0; // Success.
@@ -243,7 +247,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     {
         var promptedForIntegrationPackages = false;
 
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -293,7 +298,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     // Simulate adding the package.
                     return 0; // Success.
@@ -318,7 +323,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         var promptedForIntegrationPackages = false;
         var promptedForVersion = false;
 
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -374,7 +380,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     // Simulate adding the package.
                     return 0; // Success.
@@ -401,7 +407,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         string? addedPackageName = null;
         string? addedPackageVersion = null;
 
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
             options.AddCommandPrompterFactory = (sp) =>
             {
@@ -451,7 +458,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                         );
                 };
 
-                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, options, cancellationToken) =>
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
                 {
                     addedPackageName = packageName;
                     addedPackageVersion = packageVersion;
@@ -478,11 +485,77 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task AddCommandPreservesSourceArgumentInBothCommands()
+    {
+        // Arrange
+        string? searchUsedSource = null;
+        string? addUsedSource = null;
+        const string expectedSource = "https://custom-nuget-source.test/v3/index.json";
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                return new TestAddCommandPrompter(interactionService);
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, options, cancellationToken) =>
+                {
+                    // Capture the source used for search
+                    searchUsedSource = nugetSource;
+
+                    var redisPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Redis",
+                        Source = "nuget",
+                        Version = "9.2.0"
+                    };
+
+                    return (
+                        0, // Exit code.
+                        new NuGetPackage[] { redisPackage } // 
+                        );
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken) =>
+                {
+                    // Capture the source used for add
+                    addUsedSource = nugetSource;
+                    
+                    // Simulate adding the package.
+                    return 0; // Success.
+                };
+
+                return runner;
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        // Act
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse($"add redis --source {expectedSource}");
+
+        var exitCode = await result.InvokeAsync().WaitAsync(CliTestConstants.DefaultTimeout);
+        
+        // Assert
+        Assert.Equal(0, exitCode);
+        Assert.Equal(expectedSource, searchUsedSource);
+        Assert.Equal(expectedSource, addUsedSource);
+    }
+
+    [Fact]
     public async Task AddCommand_EmptyPackageList_DisplaysErrorMessage()
     {
         string? displayedErrorMessage = null;
 
-        var services = CliTestHelper.CreateServiceCollection(outputHelper, options => {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
             options.InteractionServiceFactory = (sp) => {
                 var testInteractionService = new TestInteractionService();
                 testInteractionService.DisplayErrorCallback = (message) => {

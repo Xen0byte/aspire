@@ -5,6 +5,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Text;
 using Aspire.Cli.Interaction;
+using Aspire.Cli.NuGet;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Utils;
 using Semver;
@@ -64,11 +65,8 @@ internal sealed class AddCommand : BaseCommand
         {
             var integrationName = parseResult.GetValue<string>("integration");
 
-            var effectiveAppHostProjectFile = await _interactionService.ShowStatusAsync("Locating app host project...", async () =>
-            {
-                var passedAppHostProjectFile = parseResult.GetValue<FileInfo?>("--project");
-                return await _projectLocator.UseOrFindAppHostProjectFileAsync(passedAppHostProjectFile, cancellationToken);
-            });
+            var passedAppHostProjectFile = parseResult.GetValue<FileInfo?>("--project");
+            var effectiveAppHostProjectFile = await _projectLocator.UseOrFindAppHostProjectFileAsync(passedAppHostProjectFile, cancellationToken);
 
             if (effectiveAppHostProjectFile is null)
             {
@@ -138,6 +136,7 @@ internal sealed class AddCommand : BaseCommand
                         effectiveAppHostProjectFile,
                         selectedNuGetPackage.Package.Id,
                         selectedNuGetPackage.Package.Version,
+                        source,
                         addPackageOptions,
                         cancellationToken);
 

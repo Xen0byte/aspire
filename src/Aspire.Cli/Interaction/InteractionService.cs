@@ -21,7 +21,6 @@ internal class InteractionService : IInteractionService
     {
         return await _ansiConsole.Status()
             .Spinner(Spinner.Known.Dots3)
-            .SpinnerStyle(Style.Parse("purple"))
             .StartAsync(statusText, (context) => action());
     }
 
@@ -29,7 +28,6 @@ internal class InteractionService : IInteractionService
     {
         _ansiConsole.Status()
             .Spinner(Spinner.Known.Dots3)
-            .SpinnerStyle(Style.Parse("purple"))
             .Start(statusText, (context) => action());
     }
 
@@ -48,7 +46,7 @@ internal class InteractionService : IInteractionService
         {
             prompt.Validate(validator);
         }
-            
+
         return await _ansiConsole.PromptAsync(prompt, cancellationToken);
     }
 
@@ -69,19 +67,18 @@ internal class InteractionService : IInteractionService
             .UseConverter(choiceFormatter)
             .AddChoices(choices)
             .PageSize(10)
-            .EnableSearch()
-            .HighlightStyle(Style.Parse("darkmagenta"));
+            .EnableSearch();
 
         return await _ansiConsole.PromptAsync(prompt, cancellationToken);
     }
 
-    public int DisplayIncompatibleVersionError(AppHostIncompatibleException ex, string appHostHostingSdkVersion)
+    public int DisplayIncompatibleVersionError(AppHostIncompatibleException ex, string appHostHostingVersion)
     {
         var cliInformationalVersion = VersionHelper.GetDefaultTemplateVersion();
-        
+
         DisplayError("The app host is not compatible. Consider upgrading the app host or Aspire CLI.");
         Console.WriteLine();
-        _ansiConsole.MarkupLine($"\t[bold]Aspire Hosting SDK Version[/]: {appHostHostingSdkVersion}");
+        _ansiConsole.MarkupLine($"\t[bold]Aspire.Hosting Version[/]: {appHostHostingVersion}");
         _ansiConsole.MarkupLine($"\t[bold]Aspire CLI Version[/]: {cliInformationalVersion}");
         _ansiConsole.MarkupLine($"\t[bold]Required Capability[/]: {ex.RequiredCapability}");
         Console.WriteLine();
@@ -138,6 +135,21 @@ internal class InteractionService : IInteractionService
     {
         _ansiConsole.WriteLine();
         _ansiConsole.WriteLine();
-        DisplayMessage("stop_sign", "[yellow bold]Operation cancelled by user action.[/]");
+        DisplayMessage("stop_sign", "[teal bold]Stopping Aspire.[/]");
+    }
+
+    public Task<bool> ConfirmAsync(string promptText, bool defaultValue = true, CancellationToken cancellationToken = default)
+    {
+        return _ansiConsole.ConfirmAsync(promptText, defaultValue, cancellationToken);
+    }
+
+    public void DisplaySubtleMessage(string message)
+    {
+        _ansiConsole.MarkupLine($"[dim]{message}[/]");
+    }
+
+    public void DisplayEmptyLine()
+    {
+        _ansiConsole.WriteLine();
     }
 }

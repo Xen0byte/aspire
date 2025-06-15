@@ -36,7 +36,7 @@ internal sealed class TestInteractionService : IInteractionService
         return Task.FromResult(choices.First());
     }
 
-    public int DisplayIncompatibleVersionError(AppHostIncompatibleException ex, string appHostHostingSdkVersion)
+    public int DisplayIncompatibleVersionError(AppHostIncompatibleException ex, string appHostHostingVersion)
     {
         return 0;
     }
@@ -63,6 +63,19 @@ internal sealed class TestInteractionService : IInteractionService
     }
 
     public void DisplayCancellationMessage()
+    {
+    }
+
+    public Task<bool> ConfirmAsync(string promptText, bool defaultValue = true, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(true);
+    }
+
+    public void DisplaySubtleMessage(string message)
+    {
+    }
+
+    public void DisplayEmptyLine()
     {
     }
 }

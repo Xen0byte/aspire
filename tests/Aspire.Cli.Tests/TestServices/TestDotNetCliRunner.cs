@@ -9,10 +9,10 @@ namespace Aspire.Cli.Tests.TestServices;
 
 internal sealed class TestDotNetCliRunner : IDotNetCliRunner
 {
-    public Func<FileInfo, string, string, DotNetCliRunnerInvocationOptions, CancellationToken, int>? AddPackageAsyncCallback { get; set; }
+    public Func<FileInfo, string, string, string?, DotNetCliRunnerInvocationOptions, CancellationToken, int>? AddPackageAsyncCallback { get; set; }
     public Func<FileInfo, DotNetCliRunnerInvocationOptions, CancellationToken, int>? BuildAsyncCallback { get; set; }
     public Func<DotNetCliRunnerInvocationOptions, CancellationToken, int>? CheckHttpCertificateAsyncCallback { get; set; }
-    public Func<FileInfo, DotNetCliRunnerInvocationOptions, CancellationToken, (int ExitCode, bool IsAspireHost, string? AspireHostingSdkVersion)>? GetAppHostInformationAsyncCallback { get; set; }
+    public Func<FileInfo, DotNetCliRunnerInvocationOptions, CancellationToken, (int ExitCode, bool IsAspireHost, string? AspireHostingVersion)>? GetAppHostInformationAsyncCallback { get; set; }
     public Func<FileInfo, string[], string[], DotNetCliRunnerInvocationOptions, CancellationToken, (int ExitCode, JsonDocument? Output)>? GetProjectItemsAndPropertiesAsyncCallback { get; set; }
     public Func<string, string, string?, bool, DotNetCliRunnerInvocationOptions, CancellationToken, (int ExitCode, string? TemplateVersion)>? InstallTemplateAsyncCallback { get; set; }
     public Func<string, string, string, DotNetCliRunnerInvocationOptions, CancellationToken, int>? NewProjectAsyncCallback { get; set; }
@@ -20,10 +20,10 @@ internal sealed class TestDotNetCliRunner : IDotNetCliRunner
     public Func<DirectoryInfo, string, bool, int, int, string?, DotNetCliRunnerInvocationOptions, CancellationToken, (int ExitCode, NuGetPackage[]? Packages)>? SearchPackagesAsyncCallback { get; set; }
     public Func<DotNetCliRunnerInvocationOptions, CancellationToken, int>? TrustHttpCertificateAsyncCallback { get; set; }
 
-    public Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, string? nugetSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
         return AddPackageAsyncCallback != null
-            ? Task.FromResult(AddPackageAsyncCallback(projectFilePath, packageName, packageVersion, options, cancellationToken))
+            ? Task.FromResult(AddPackageAsyncCallback(projectFilePath, packageName, packageVersion, nugetSource, options, cancellationToken))
             : throw new NotImplementedException();
     }
 
@@ -41,7 +41,7 @@ internal sealed class TestDotNetCliRunner : IDotNetCliRunner
             : Task.FromResult(0); // Return success if not overridden.
     }
 
-    public Task<(int ExitCode, bool IsAspireHost, string? AspireHostingSdkVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public Task<(int ExitCode, bool IsAspireHost, string? AspireHostingVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
         var informationalVersion = VersionHelper.GetDefaultTemplateVersion();
 
@@ -64,7 +64,7 @@ internal sealed class TestDotNetCliRunner : IDotNetCliRunner
             : Task.FromResult<(int, string?)>((0, version)); // If not overridden, just return success for the version specified.
     }
 
-    public Task<int> NewProjectAsync(string templateName, string name, string outputPath, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public Task<int> NewProjectAsync(string templateName, string name, string outputPath, string[] extraArgs, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
         return NewProjectAsyncCallback != null
             ? Task.FromResult(NewProjectAsyncCallback(templateName, name, outputPath, options, cancellationToken))
