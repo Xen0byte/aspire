@@ -8,6 +8,8 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Resources;
+using Aspire.Cli.Telemetry;
 using Aspire.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,15 +18,15 @@ namespace Aspire.Cli;
 
 internal interface IDotNetCliRunner
 {
-    Task<(int ExitCode, bool IsAspireHost, string? AspireHostingSdkVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
+    Task<(int ExitCode, bool IsAspireHost, string? AspireHostingVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<(int ExitCode, JsonDocument? Output)> GetProjectItemsAndPropertiesAsync(FileInfo projectFile, string[] items, string[] properties, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<int> RunAsync(FileInfo projectFile, bool watch, bool noBuild, string[] args, IDictionary<string, string>? env, TaskCompletionSource<IAppHostBackchannel>? backchannelCompletionSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<int> CheckHttpCertificateAsync(DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<int> TrustHttpCertificateAsync(DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<(int ExitCode, string? TemplateVersion)> InstallTemplateAsync(string packageName, string version, string? nugetSource, bool force, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
-    Task<int> NewProjectAsync(string templateName, string name, string outputPath, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
+    Task<int> NewProjectAsync(string templateName, string name, string outputPath, string[] extraArgs, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<int> BuildAsync(FileInfo projectFilePath, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
-    Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
+    Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, string? nugetSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
     Task<(int ExitCode, NuGetPackage[]? Packages)> SearchPackagesAsync(DirectoryInfo workingDirectory, string query, bool prerelease, int take, int skip, string? nugetSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken);
 }
 
@@ -36,41 +38,31 @@ internal sealed class DotNetCliRunnerInvocationOptions
     public bool NoLaunchProfile { get; set; }
 }
 
-internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider) : IDotNetCliRunner
+internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider, AspireCliTelemetry telemetry) : IDotNetCliRunner
 {
-    private readonly ActivitySource _activitySource = new ActivitySource(nameof(DotNetCliRunner));
 
     internal Func<int> GetCurrentProcessId { get; set; } = () => Environment.ProcessId;
 
-    public async Task<(int ExitCode, bool IsAspireHost, string? AspireHostingSdkVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public async Task<(int ExitCode, bool IsAspireHost, string? AspireHostingVersion)> GetAppHostInformationAsync(FileInfo projectFile, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
-        string[] cliArgs = ["msbuild", "-getproperty:IsAspireHost,AspireHostingSDKVersion", projectFile.FullName];
+        // Get both properties and PackageReference items to determine Aspire.Hosting version
+        var (exitCode, jsonDocument) = await GetProjectItemsAndPropertiesAsync(
+            projectFile,
+            ["PackageReference", "AspireProjectOrPackageReference"],
+            ["IsAspireHost", "AspireHostingSDKVersion"],
+            options,
+            cancellationToken);
 
-        // Syphon off the stdout from this execution to build the JSON document
-        // containing the information we need for the apphost, but allow it to
-        // flow up to the invoker if they have a callback.
-        var stdoutBuilder = new StringBuilder();
-        var existingStandardOutputCallback = options.StandardOutputCallback; // Preserve the existing callback if it exists.
-        options.StandardOutputCallback = (line) => {
-            stdoutBuilder.AppendLine(line);
-            existingStandardOutputCallback?.Invoke(line);
-        };
-
-        var exitCode = await ExecuteAsync(
-            args: cliArgs,
-            env: null,
-            workingDirectory: projectFile.Directory!,
-            backchannelCompletionSource: null,
-            options: options,
-            cancellationToken: cancellationToken);
-
-        if (exitCode == 0)
+        if (exitCode == 0 && jsonDocument != null)
         {
-            var stdout = stdoutBuilder.ToString();
-            var json = JsonDocument.Parse(stdout);
-            var properties = json.RootElement.GetProperty("Properties");
+            var rootElement = jsonDocument.RootElement;
+
+            if (!rootElement.TryGetProperty("Properties", out var properties))
+            {
+                return (exitCode, false, null);
+            }
 
             if (!properties.TryGetProperty("IsAspireHost", out var isAspireHostElement))
             {
@@ -79,15 +71,49 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
             if (isAspireHostElement.GetString() == "true")
             {
-                if (properties.TryGetProperty("AspireHostingSDKVersion", out var aspireHostingSdkVersionElement))
+                // Try to get Aspire.Hosting version from PackageReference items
+                string? aspireHostingVersion = null;
+
+                if (rootElement.TryGetProperty("Items", out var items))
                 {
-                    var aspireHostingSdkVersion = aspireHostingSdkVersionElement.GetString();
-                    return (exitCode, true, aspireHostingSdkVersion);
+                    // Check PackageReference items first
+                    if (items.TryGetProperty("PackageReference", out var packageReferences))
+                    {
+                        foreach (var packageRef in packageReferences.EnumerateArray())
+                        {
+                            if (packageRef.TryGetProperty("Identity", out var identity) &&
+                                identity.GetString() == "Aspire.Hosting" &&
+                                packageRef.TryGetProperty("Version", out var version))
+                            {
+                                aspireHostingVersion = version.GetString();
+                                break;
+                            }
+                        }
+                    }
+
+                    // Fallback to AspireProjectOrPackageReference items if not found
+                    if (aspireHostingVersion == null && items.TryGetProperty("AspireProjectOrPackageReference", out var aspireProjectOrPackageReferences))
+                    {
+                        foreach (var aspireRef in aspireProjectOrPackageReferences.EnumerateArray())
+                        {
+                            if (aspireRef.TryGetProperty("Identity", out var identity) &&
+                                identity.GetString() == "Aspire.Hosting" &&
+                                aspireRef.TryGetProperty("Version", out var version))
+                            {
+                                aspireHostingVersion = version.GetString();
+                                break;
+                            }
+                        }
+                    }
                 }
-                else
+
+                // If no package version found, fallback to SDK version
+                if (aspireHostingVersion == null && properties.TryGetProperty("AspireHostingSDKVersion", out var aspireHostingSdkVersionElement))
                 {
-                    return (exitCode, true, null);
+                    aspireHostingVersion = aspireHostingSdkVersionElement.GetString();
                 }
+
+                return (exitCode, true, aspireHostingVersion);
             }
             else
             {
@@ -102,8 +128,8 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<(int ExitCode, JsonDocument? Output)> GetProjectItemsAndPropertiesAsync(FileInfo projectFile, string[] items, string[] properties, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
-        
+        using var activity = telemetry.ActivitySource.StartActivity();
+
         string[] cliArgs = [
             "msbuild",
             $"-getProperty:{string.Join(",", properties)}",
@@ -156,11 +182,11 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<int> RunAsync(FileInfo projectFile, bool watch, bool noBuild, string[] args, IDictionary<string, string>? env, TaskCompletionSource<IAppHostBackchannel>? backchannelCompletionSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         if (watch && noBuild)
         {
-            var ex = new InvalidOperationException("Cannot use --watch and --no-build at the same time.");
+            var ex = new InvalidOperationException(ErrorStrings.CantUseBothWatchAndNoBuild);
             backchannelCompletionSource?.SetException(ex);
             throw ex;
         }
@@ -182,7 +208,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<int> CheckHttpCertificateAsync(DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         string[] cliArgs = ["dev-certs", "https", "--check", "--trust"];
         return await ExecuteAsync(
@@ -196,7 +222,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<int> TrustHttpCertificateAsync(DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         string[] cliArgs = ["dev-certs", "https", "--trust"];
         return await ExecuteAsync(
@@ -210,7 +236,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<(int ExitCode, string? TemplateVersion)> InstallTemplateAsync(string packageName, string version, string? nugetSource, bool force, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity(nameof(InstallTemplateAsync), ActivityKind.Client);
+        using var activity = telemetry.ActivitySource.StartActivity(nameof(InstallTemplateAsync), ActivityKind.Client);
 
         List<string> cliArgs = ["new", "install", $"{packageName}::{version}"];
 
@@ -271,7 +297,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
             // NOTE: This parsing logic is hopefully temporary and in the future we'll
             //       have structured output:
-            //       
+            //
             //       See: https://github.com/dotnet/sdk/issues/46345
             //
             if (!TryParsePackageVersionFromStdout(stdout, out var parsedVersion))
@@ -279,9 +305,9 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
                 logger.LogError("Failed to parse template version from stdout.");
 
                 // Throwing here because this should never happen - we don't want to return
-                // the zero exit code if we can't parse the version because its possibly a 
+                // the zero exit code if we can't parse the version because its possibly a
                 // signal that the .NET SDK has changed.
-                throw new InvalidOperationException("Failed to parse template version from stdout.");
+                throw new InvalidOperationException(ErrorStrings.FailedToParseTemplateVersionFromStdout);
             }
 
             return (exitCode, parsedVersion);
@@ -298,7 +324,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
             version = null;
             return false;
         }
-        
+
         var templateVersion = successLine.Split(" ") switch { // Break up the success line.
             { Length: > 2 } chunks => chunks[1].Split("::") switch { // Break up the template+version string
                 { Length: 2 } versionChunks => versionChunks[1], // The version in the second chunk
@@ -319,11 +345,11 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
         }
     }
 
-    public async Task<int> NewProjectAsync(string templateName, string name, string outputPath, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public async Task<int> NewProjectAsync(string templateName, string name, string outputPath, string[] extraArgs, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
-        string[] cliArgs = ["new", templateName, "--name", name, "--output", outputPath];
+        string[] cliArgs = ["new", templateName, "--name", name, "--output", outputPath, ..extraArgs];
         return await ExecuteAsync(
             args: cliArgs,
             env: null,
@@ -336,21 +362,21 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
     internal static string GetBackchannelSocketPath()
     {
         var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var dotnetCliPath = Path.Combine(homeDirectory, ".dotnet", "aspire", "cli", "backchannels");
+        var aspireCliPath = Path.Combine(homeDirectory, ".aspire", "cli", "backchannels");
 
-        if (!Directory.Exists(dotnetCliPath))
+        if (!Directory.Exists(aspireCliPath))
         {
-            Directory.CreateDirectory(dotnetCliPath);
+            Directory.CreateDirectory(aspireCliPath);
         }
 
         var uniqueSocketPathSegment = Guid.NewGuid().ToString("N");
-        var socketPath = Path.Combine(dotnetCliPath, $"cli.sock.{uniqueSocketPathSegment}");
+        var socketPath = Path.Combine(aspireCliPath, $"cli.sock.{uniqueSocketPathSegment}");
         return socketPath;
     }
 
     public virtual async Task<int> ExecuteAsync(string[] args, IDictionary<string, string>? env, DirectoryInfo workingDirectory, TaskCompletionSource<IAppHostBackchannel>? backchannelCompletionSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -469,7 +495,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     private async Task StartBackchannelAsync(Process process, string socketPath, TaskCompletionSource<IAppHostBackchannel> backchannelCompletionSource, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
 
@@ -543,7 +569,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<int> BuildAsync(FileInfo projectFilePath, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
         string[] cliArgs = ["build", projectFilePath.FullName];
         return await ExecuteAsync(
@@ -554,18 +580,27 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
             options: options,
             cancellationToken: cancellationToken);
     }
-    public async Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
+    public async Task<int> AddPackageAsync(FileInfo projectFilePath, string packageName, string packageVersion, string? nugetSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
 
-        string[] cliArgs = [
+        var cliArgsList = new List<string>
+        {
             "add",
             projectFilePath.FullName,
             "package",
             packageName,
             "--version",
             packageVersion
-        ];
+        };
+
+        if (!string.IsNullOrEmpty(nugetSource))
+        {
+            cliArgsList.Add("--source");
+            cliArgsList.Add(nugetSource);
+        }
+
+        string[] cliArgs = [.. cliArgsList];
 
         logger.LogInformation("Adding package {PackageName} with version {PackageVersion} to project {ProjectFilePath}", packageName, packageVersion, projectFilePath.FullName);
 
@@ -591,7 +626,7 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
 
     public async Task<(int ExitCode, NuGetPackage[]? Packages)> SearchPackagesAsync(DirectoryInfo workingDirectory, string query, bool prerelease, int take, int skip, string? nugetSource, DotNetCliRunnerInvocationOptions options, CancellationToken cancellationToken)
     {
-        using var activity = _activitySource.StartActivity();
+        using var activity = telemetry.ActivitySource.StartActivity();
         List<string> cliArgs = [
             "package",
             "search",

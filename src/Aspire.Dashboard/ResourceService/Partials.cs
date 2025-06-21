@@ -39,7 +39,8 @@ partial class Resource
                 StateStyle = HasStateStyle ? StateStyle : null,
                 Commands = GetCommands(),
                 HealthReports = HealthReports.Select(ToHealthReportViewModel).OrderBy(vm => vm.Name).ToImmutableArray(),
-                IsHidden = IsHidden
+                IsHidden = IsHidden,
+                SupportsDetailedTelemetry = SupportsDetailedTelemetry
             };
         }
         catch (Exception ex)
@@ -144,7 +145,8 @@ partial class Resource
                 value: ValidateNotNull(property.Value),
                 isValueSensitive: property.IsSensitive,
                 knownProperty: knownProperty,
-                priority: priority);
+                priority: priority)
+            { IsValueMasked = property.IsSensitive };
 
             if (builder.ContainsKey(propertyViewModel.Name))
             {
