@@ -27,6 +27,7 @@ public class AzureCosmosDBResource(string name, Action<AzureResourceInfrastructu
     /// <summary>
     /// Gets the "connectionString" reference from the secret outputs of the Azure Cosmos DB resource.
     /// </summary>
+    [Obsolete("BicepSecretOutputReference is no longer supported. Use ConnectionStringOutput instead.")]
     public BicepSecretOutputReference ConnectionString => new("connectionString", this);
 
     /// <summary>
@@ -37,13 +38,23 @@ public class AzureCosmosDBResource(string name, Action<AzureResourceInfrastructu
     public BicepOutputReference ConnectionStringOutput => new("connectionString", this);
 
     /// <summary>
+    /// Whether or not to use the default Azure Cosmos DB SKU. By default, this is set to false, and the Cosmos DB
+    /// account is created as a serverless account. If true, it will use the default Azure Cosmos DB SKU, which is
+    /// typically a provisioned throughput account.
+    /// </summary>
+    internal bool UseDefaultAzureSku { get; set; } // Default to false
+
+    /// <summary>
     /// Gets the "connectionString" secret reference from the key vault associated with this resource.
     ///
     /// This is set when access key authentication is used. The connection string is stored in a secret in the Azure Key Vault.
     /// </summary>
     internal IAzureKeyVaultSecretReference? ConnectionStringSecretOutput { get; set; }
 
-    private BicepOutputReference NameOutputReference => new("name", this);
+    /// <summary>
+    /// Gets the "name" output reference for the resource.
+    /// </summary>
+    public BicepOutputReference NameOutputReference => new("name", this);
 
     /// <summary>
     /// Gets a value indicating whether the resource uses access key authentication.

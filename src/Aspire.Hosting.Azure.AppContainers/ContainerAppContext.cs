@@ -6,7 +6,7 @@ using Aspire.Hosting.ApplicationModel;
 using Azure.Provisioning;
 using Azure.Provisioning.AppContainers;
 using Azure.Provisioning.Expressions;
-using Azure.Provisioning.KeyVault;
+using Azure.Provisioning.Primitives;
 using Azure.Provisioning.Resources;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +17,13 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
     private readonly ContainerAppEnvironmentContext _containerAppEnvironmentContext = containerAppEnvironmentContext;
 
     public IResource Resource => resource;
+
+    /// <summary>
+    /// The normalized container app name (lowercase) that will be used consistently 
+    /// throughout the container app creation process for both the resource identifier 
+    /// and endpoint mapping host names.
+    /// </summary>
+    public string NormalizedContainerAppName => resource.Name.ToLowerInvariant();
 
     // Endpoint state after processing
     record struct EndpointMapping(string Scheme, string Host, int Port, int? TargetPort, bool IsHttpIngress, bool External);
@@ -29,13 +36,12 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
     // bicep compatible values
     public Dictionary<string, object> EnvironmentVariables { get; } = [];
     public List<object> Args { get; } = [];
-    public Dictionary<string, (ContainerMountAnnotation, IManifestExpressionProvider)> Volumes { get; } = [];
+    public Dictionary<string, (ContainerMountAnnotation, BicepOutputReference)> Volumes { get; } = [];
 
     // Bicep build state
     private ProvisioningParameter? _containerRegistryUrlParameter;
     private ProvisioningParameter? _containerRegistryManagedIdentityIdParameter;
-    public Dictionary<string, KeyVaultService> KeyVaultRefs { get; } = [];
-    public Dictionary<string, KeyVaultSecret> KeyVaultSecretRefs { get; } = [];
+
     private AzureResourceInfrastructure? _infrastructure;
     public AzureResourceInfrastructure Infra => _infrastructure ?? throw new InvalidOperationException("Infra is not set");
 
@@ -58,10 +64,7 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
             containerImageParam = AllocateContainerImageParameter();
         }
 
-        var containerAppResource = new ContainerApp(Infrastructure.NormalizeBicepIdentifier(resource.Name))
-        {
-            Name = resource.Name.ToLowerInvariant()
-        };
+        var containerAppResource = CreateContainerApp();
 
         BicepValue<string>? containerAppIdentityId = null;
 
@@ -81,11 +84,7 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
 
         containerAppResource.EnvironmentId = containerAppIdParam;
 
-        var configuration = new ContainerAppConfiguration()
-        {
-            ActiveRevisionsMode = ContainerAppActiveRevisionsMode.Single,
-        };
-        containerAppResource.Configuration = configuration;
+        var configuration = containerAppResource.Configuration;
 
         AddIngress(configuration);
 
@@ -103,7 +102,7 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
         template.Containers = [containerAppContainer];
 
         containerAppContainer.Image = containerImageParam is null ? containerImageName! : containerImageParam;
-        containerAppContainer.Name = resource.Name;
+        containerAppContainer.Name = NormalizedContainerAppName;
 
         SetEntryPoint(containerAppContainer);
         AddEnvironmentVariablesAndCommandLineArgs(
@@ -112,17 +111,6 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
             containerAppIdentityId);
         AddAzureClientId(appIdentityAnnotation?.IdentityResource, containerAppContainer);
         AddVolumes(template, containerAppContainer);
-
-        // Keyvault
-        foreach (var (_, v) in KeyVaultRefs)
-        {
-            infra.Add(v);
-        }
-
-        foreach (var (_, v) in KeyVaultSecretRefs)
-        {
-            infra.Add(v);
-        }
 
         infra.Add(containerAppResource);
 
@@ -133,6 +121,44 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
                 a.Configure(infra, containerAppResource);
             }
         }
+    }
+
+    private ContainerApp CreateContainerApp()
+    {
+        var containerApp = new ContainerApp(Infrastructure.NormalizeBicepIdentifier(resource.Name))
+        {
+            Name = NormalizedContainerAppName
+        };
+
+        var configuration = new ContainerAppConfiguration()
+        {
+            ActiveRevisionsMode = ContainerAppActiveRevisionsMode.Single,
+        };
+        containerApp.Configuration = configuration;
+
+        const string latestPreview = "2025-02-02-preview"; // these properties are currently only available in preview
+
+        // default autoConfigureDataProtection to true for .NET projects
+        if (resource is ProjectResource)
+        {
+            containerApp.ResourceVersion = latestPreview;
+
+            var value = new BicepValue<bool>(true);
+            ((IBicepValue)value).Self = new BicepValueReference(configuration, "AutoConfigureDataProtection", ["runtime", "dotnet", "autoConfigureDataProtection"]);
+            configuration.ProvisionableProperties["AutoConfigureDataProtection"] = value;
+        }
+
+        // default kind to functionapp for Azure Functions
+        if (resource.HasAnnotationOfType<AzureFunctionsAnnotation>())
+        {
+            containerApp.ResourceVersion = latestPreview;
+
+            var value = new BicepValue<string>("functionapp");
+            ((IBicepValue)value).Self = new BicepValueReference(containerApp, "Kind", ["kind"]);
+            containerApp.ProvisionableProperties["Kind"] = value;
+        }
+
+        return containerApp;
     }
 
     private void AddVolumes(ContainerAppTemplate template, ContainerAppContainer containerAppContainer)
@@ -366,7 +392,7 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
                 // For the http ingress port is always 80 or 443
                 var port = e.UriScheme is "http" ? 80 : 443;
 
-                _endpointMapping[e.Name] = new(e.UriScheme, resource.Name, port, targetPort, true, httpIngress.External);
+                _endpointMapping[e.Name] = new(e.UriScheme, NormalizedContainerAppName, port, targetPort, true, httpIngress.External);
             }
         }
 
@@ -386,7 +412,7 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
 
             foreach (var e in g.Endpoints)
             {
-                _endpointMapping[e.Name] = new(e.UriScheme, resource.Name, e.Port ?? g.Port.Value, g.Port.Value, false, g.External);
+                _endpointMapping[e.Name] = new(e.UriScheme, NormalizedContainerAppName, e.Port ?? g.Port.Value, g.Port.Value, false, g.External);
             }
         }
     }
@@ -535,15 +561,12 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
             return (AllocateParameter(output, secretType: secretType), secretType);
         }
 
-        if (value is BicepSecretOutputReference secretOutputReference)
+#pragma warning disable CS0618 // Type or member is obsolete
+        if (value is BicepSecretOutputReference)
         {
-            if (parent is null)
-            {
-                return (AllocateKeyVaultSecretUriReference(secretOutputReference), SecretType.KeyVault);
-            }
-
-            return (AllocateParameter(secretOutputReference, secretType: SecretType.KeyVault), SecretType.KeyVault);
+            throw new NotSupportedException("Automatic Key vault generation is not supported in this environment. Please create a key vault resource directly.");
         }
+#pragma warning restore CS0618 // Type or member is obsolete
 
         if (value is IAzureKeyVaultSecretReference vaultSecretReference)
         {
@@ -596,33 +619,12 @@ internal sealed class ContainerAppContext(IResource resource, ContainerAppEnviro
 
         }
 
+        if (value is IManifestExpressionProvider manifestExpressionProvider)
+        {
+            return (AllocateParameter(manifestExpressionProvider, secretType), secretType);
+        }
+
         throw new NotSupportedException("Unsupported value type " + value.GetType());
-    }
-
-    private BicepValue<string> AllocateKeyVaultSecretUriReference(BicepSecretOutputReference secretOutputReference)
-    {
-        if (!KeyVaultRefs.TryGetValue(secretOutputReference.Resource.Name, out var kv))
-        {
-            // We resolve the keyvault that represents the storage for secret outputs
-            var parameter = AllocateParameter(_containerAppEnvironmentContext.Environment.GetSecretOutputKeyVault(secretOutputReference.Resource));
-            kv = KeyVaultService.FromExisting($"{parameter.BicepIdentifier}_kv");
-            kv.Name = parameter;
-
-            KeyVaultRefs[secretOutputReference.Resource.Name] = kv;
-        }
-
-        if (!KeyVaultSecretRefs.TryGetValue(secretOutputReference.ValueExpression, out var secret))
-        {
-            // Now we resolve the secret
-            var secretBicepIdentifier = Infrastructure.NormalizeBicepIdentifier($"{kv.BicepIdentifier}_{secretOutputReference.Name}");
-            secret = KeyVaultSecret.FromExisting(secretBicepIdentifier);
-            secret.Name = secretOutputReference.Name;
-            secret.Parent = kv;
-
-            KeyVaultSecretRefs[secretOutputReference.ValueExpression] = secret;
-        }
-
-        return secret.Properties.SecretUri;
     }
 
     private BicepValue<string> AllocateKeyVaultSecretUriReference(IAzureKeyVaultSecretReference secretOutputReference)

@@ -58,7 +58,7 @@ internal sealed class AzureResourcePreparer(
         var azureResources = new List<(IResource, IAzureResource)>();
         foreach (var resource in appModel.Resources)
         {
-            if (resource.IsContainer())
+            if (resource.IsContainer() || resource.IsEmulator())
             {
                 continue;
             }
@@ -148,6 +148,12 @@ internal sealed class AzureResourcePreparer(
                         .ToLookup(a => a.Target);
                 foreach (var azureReference in azureReferences.OfType<AzureProvisioningResource>())
                 {
+                    if (azureReference.IsContainer() || azureReference.IsEmulator())
+                    {
+                        // Skip emulators
+                        continue;
+                    }
+
                     var roleAssignments = azureReferencesWithRoleAssignments[azureReference];
                     if (roleAssignments.Any())
                     {
@@ -425,11 +431,13 @@ internal sealed class AzureResourcePreparer(
             return;
         }
 
+#pragma warning disable CS0618 // Type or member is obsolete
         if (value is BicepSecretOutputReference secretOutputReference)
         {
             azureReferences.Add(secretOutputReference.Resource);
             return;
         }
+#pragma warning restore CS0618 // Type or member is obsolete
 
         if (value is IAzureKeyVaultSecretReference keyVaultSecretReference)
         {
@@ -443,6 +451,12 @@ internal sealed class AzureResourcePreparer(
             {
                 ProcessAzureReferences(azureReferences, vp);
             }
+            return;
+        }
+
+        if (value is IManifestExpressionProvider)
+        {
+            // Unknown manifest expression providers don't have Azure references to track
             return;
         }
 
