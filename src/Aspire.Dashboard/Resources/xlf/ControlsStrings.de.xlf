@@ -72,11 +72,6 @@
         <target state="translated">Es wurde eine Kardinalitätsbegrenzung festgestellt</target>
         <note />
       </trans-unit>
-      <trans-unit id="ChartContainerSelectFilters">
-        <source>Select filters</source>
-        <target state="translated">Filter auswählen</target>
-        <note />
-      </trans-unit>
       <trans-unit id="ChartContainerShowCountLabel">
         <source>Show count</source>
         <target state="translated">Anzahl anzeigen</target>
@@ -232,6 +227,11 @@
         <target state="translated">Wert anzeigen</target>
         <note />
       </trans-unit>
+      <trans-unit id="HideHiddenResources">
+        <source>Hide hidden resources</source>
+        <target state="translated">Ausgeblendete Ressourcen ausblenden</target>
+        <note />
+      </trans-unit>
       <trans-unit id="LabelAll">
         <source>(All)</source>
         <target state="translated">(Alle)</target>
@@ -247,10 +247,10 @@
         <target state="translated">(Keine)</target>
         <note />
       </trans-unit>
-      <trans-unit id="LabelUnset">
+      <trans-unit id="LabelValueUnset">
         <source>(Unset)</source>
         <target state="translated">(Nicht festgelegt)</target>
-        <note />
+        <note>Unset is a noun, not a verb, to indicate that the value has not been set.</note>
       </trans-unit>
       <trans-unit id="LinkAddressColumnHeader">
         <source>Address</source>
@@ -275,11 +275,6 @@
       <trans-unit id="MetricTableNoMetricsFound">
         <source>No metrics data found</source>
         <target state="translated">Keine Metrikdaten gefunden.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="MetricTableShowLatestValues">
-        <source>Show latest 10 values</source>
-        <target state="translated">Neueste 10 Werte anzeigen</target>
         <note />
       </trans-unit>
       <trans-unit id="MetricTableShowOnlyValueChanges">
@@ -432,6 +427,11 @@
         <target state="translated">Anwendung auswählen</target>
         <note />
       </trans-unit>
+      <trans-unit id="ShowHiddenResources">
+        <source>Show hidden resources</source>
+        <target state="translated">Ausgeblendete Ressourcen anzeigen</target>
+        <note />
+      </trans-unit>
       <trans-unit id="SpanDetailsBacklinksHeader">
         <source>Backlinks</source>
         <target state="translated">Backlinks</target>
@@ -497,21 +497,6 @@
         <target state="translated">Zustand</target>
         <note />
       </trans-unit>
-      <trans-unit id="StructuredFilteringAddFilter">
-        <source>Add filter</source>
-        <target state="translated">Filter hinzufügen</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="StructuredFilteringFilters">
-        <source>Filters</source>
-        <target state="translated">Filter</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="StructuredFilteringNoFilters">
-        <source>No filters</source>
-        <target state="translated">Keine Filter</target>
-        <note />
-      </trans-unit>
       <trans-unit id="StructuredLogsDetailsContextHeader">
         <source>Context</source>
         <target state="translated">Kontext</target>
@@ -555,11 +540,6 @@
       <trans-unit id="ToggleNesting">
         <source>Toggle nesting</source>
         <target state="translated">Verschachtelung umschalten</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="TraceDetailAttributesHeader">
-        <source>Attributes</source>
-        <target state="translated">Attribute</target>
         <note />
       </trans-unit>
       <trans-unit id="ViewAction">

@@ -127,17 +127,11 @@
     <value>{0} console logs</value>
     <comment>{0} is an application name</comment>
   </data>
-  <data name="ConsoleLogsInitializingLogViewer" xml:space="preserve">
-    <value>Initializing log viewer...</value>
-  </data>
   <data name="ConsoleLogsLogsNotYetAvailable" xml:space="preserve">
     <value>Logs not yet available</value>
   </data>
   <data name="ConsoleLogsWatchingLogs" xml:space="preserve">
     <value>Watching logs...</value>
-  </data>
-  <data name="ConsoleLogsFailedToInitialize" xml:space="preserve">
-    <value>Failed to initialize</value>
   </data>
   <data name="ConsoleLogsFinishedWatchingLogs" xml:space="preserve">
     <value>Finished watching logs</value>
@@ -179,5 +173,8 @@
   <data name="ConsoleLogsPauseDetails" xml:space="preserve">
     <value>&lt;Log capture paused between {0} and {1}, {2} log(s) filtered out&gt;</value>
     <comment>{0} is a date, {1} is a date, {2} is a number.</comment>
+  </data>
+  <data name="ConsoleLogsErrorWatchingLogs" xml:space="preserve">
+    <value>Error watching logs</value>
   </data>
 </root>

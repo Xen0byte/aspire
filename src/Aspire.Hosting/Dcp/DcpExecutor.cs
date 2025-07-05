@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Data;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -16,6 +17,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ConsoleLogs;
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp.Model;
+using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Utils;
 using Json.Patch;
 using k8s;
@@ -47,6 +49,7 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
     private readonly ILogger<DcpExecutor> _logger;
     private readonly DistributedApplicationModel _model;
     private readonly DistributedApplicationOptions _distributedApplicationOptions;
+    private readonly IDistributedApplicationEventing _distributedApplicationEventing;
     private readonly IOptions<DcpOptions> _options;
     private readonly DistributedApplicationExecutionContext _executionContext;
     private readonly List<AppResource> _appResources = [];
@@ -75,6 +78,7 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                        DistributedApplicationModel model,
                        IKubernetesService kubernetesService,
                        IConfiguration configuration,
+                       IDistributedApplicationEventing distributedApplicationEventing,
                        DistributedApplicationOptions distributedApplicationOptions,
                        IOptions<DcpOptions> options,
                        DistributedApplicationExecutionContext executionContext,
@@ -92,6 +96,7 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
         _executorEvents = executorEvents;
         _logger = logger;
         _model = model;
+        _distributedApplicationEventing = distributedApplicationEventing;
         _distributedApplicationOptions = distributedApplicationOptions;
         _options = options;
         _executionContext = executionContext;
@@ -422,6 +427,12 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
     {
         if (resource is Container container)
         {
+            if (container.Spec.Start == false && (container.Status?.State == null || container.Status?.State == ContainerState.Pending))
+            {
+                // If the resource is set for delay start, treat pending states as NotStarted.
+                return new(KnownResourceStates.NotStarted, null, null);
+            }
+
             return new(container.Status?.State, container.Status?.StartupTimestamp?.ToUniversalTime(), container.Status?.FinishTimestamp?.ToUniversalTime());
         }
         if (resource is Executable executable)
@@ -709,6 +720,13 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
 
         await _executorEvents.PublishAsync(new OnEndpointsAllocatedContext(cancellationToken)).ConfigureAwait(false);
 
+        // Fire the endpoints allocated event for all DCP managed resources with endpoints.
+        foreach (var resource in toCreate.Select(r => r.ModelResource).OfType<IResourceWithEndpoints>())
+        {
+            var resourceEvent = new ResourceEndpointsAllocatedEvent(resource, _executionContext.ServiceProvider);
+            await _distributedApplicationEventing.PublishAsync(resourceEvent, EventDispatchBehavior.NonBlockingConcurrent, cancellationToken).ConfigureAwait(false);
+        }
+
         var containersTask = CreateContainersAsync(toCreate.Where(ar => ar.DcpResource is Container), cancellationToken);
         var executablesTask = CreateExecutablesAsync(toCreate.Where(ar => ar.DcpResource is Executable), cancellationToken);
 
@@ -736,10 +754,13 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                     throw new InvalidOperationException($"Service '{svc.Metadata.Name}' needs to specify a port for endpoint '{sp.EndpointAnnotation.Name}' since it isn't using a proxy.");
                 }
 
+                var (targetHost, bindingMode) = NormalizeTargetHost(sp.EndpointAnnotation.TargetHost);
+
                 sp.EndpointAnnotation.AllocatedEndpoint = new AllocatedEndpoint(
                     sp.EndpointAnnotation,
-                    "localhost",
+                    targetHost,
                     (int)svc.AllocatedPort!,
+                    bindingMode,
                     containerHostAddress: appResource.ModelResource.IsContainer() ? containerHost : null,
                     targetPortExpression: $$$"""{{- portForServing "{{{svc.Metadata.Name}}}" -}}""");
             }
@@ -774,12 +795,19 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                 var port = _options.Value.RandomizePorts && endpoint.IsProxied ? null : endpoint.Port;
                 svc.Spec.Port = port;
                 svc.Spec.Protocol = PortProtocol.FromProtocolType(endpoint.Protocol);
-                svc.Spec.Address = endpoint.TargetHost switch
+                if (string.Equals("localhost", endpoint.TargetHost, StringComparison.OrdinalIgnoreCase))
                 {
-                    "*" or "+" => "0.0.0.0",
-                    _ => endpoint.TargetHost
-                };
-                svc.Spec.AddressAllocationMode = endpoint.IsProxied ? AddressAllocationModes.Localhost : AddressAllocationModes.Proxyless;
+                    svc.Spec.Address = "localhost";
+                }
+                else
+                {
+                    svc.Spec.Address = endpoint.TargetHost;
+                }
+
+                if (!endpoint.IsProxied)
+                {
+                    svc.Spec.AddressAllocationMode = AddressAllocationModes.Proxyless;
+                }
 
                 // So we can associate the service with the resource that produced it and the endpoint it represents.
                 svc.Annotate(CustomResource.ResourceNameAnnotation, sp.ModelResource.Name);
@@ -1211,8 +1239,17 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
             // Create a custom container network for Aspire if there are container resources
             if (containerResources.Any())
             {
-                // The network will be created with a unique postfix to avoid conflicts with other Aspire AppHost networks
-                tasks.Add(_kubernetesService.CreateAsync(ContainerNetwork.Create(DefaultAspireNetworkName), cancellationToken));
+                var network = ContainerNetwork.Create(DefaultAspireNetworkName);
+                if (containerResources.Any(cr => cr.ModelResource.GetContainerLifetimeType() == ContainerLifetime.Persistent))
+                {
+                    // If we have any persistent container resources
+                    network.Spec.Persistent = true;
+                    // Persistent networks require a predictable name to be reused between runs.
+                    // Append the same project hash suffix used for persistent container names.
+                    network.Spec.NetworkName = $"{DefaultAspireNetworkName}-{_nameGenerator.GetProjectHashSuffix()}";
+                }
+
+                tasks.Add(_kubernetesService.CreateAsync(network, cancellationToken));
             }
 
             foreach (var cr in containerResources)
@@ -1223,8 +1260,10 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
 
                 if (cr.ModelResource.TryGetLastAnnotation<ExplicitStartupAnnotation>(out _))
                 {
-                    await _executorEvents.PublishAsync(new OnResourceChangedContext(cancellationToken, KnownResourceTypes.Container, cr.ModelResource, cr.DcpResourceName, new ResourceStatus(KnownResourceStates.NotStarted, null, null), s => s with { State = new ResourceStateSnapshot(KnownResourceStates.NotStarted, null) })).ConfigureAwait(false);
-                    continue;
+                    if (cr.DcpResource is Container container)
+                    {
+                        container.Spec.Start = false;
+                    }
                 }
 
                 tasks.Add(CreateContainerAsyncCore(cr, cancellationToken));
@@ -1413,6 +1452,7 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
             }
 
             var spAnn = new ServiceProducerAnnotation(sp.Service.Metadata.Name);
+            spAnn.Address = NormalizeServiceProducerTargetHost(ea.TargetHost, ea.IsProxied);
             spAnn.Port = ea.TargetPort;
             dcpResource.AnnotateAsObjectList(CustomResource.ServiceProducerAnnotation, spAnn);
             appResource.ServicesProduced.Add(sp);
@@ -1426,6 +1466,60 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
             }
             return false;
         }
+    }
+
+    private static string NormalizeServiceProducerTargetHost(string targetHost, bool isProxied)
+    {
+        // When proxied, the individual services are always bound to localhost even if the proxy
+        // is bound to different addresses.
+        if (isProxied)
+        {
+            return "localhost";
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(targetHost) || string.Equals(targetHost, "localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return "localhost";
+            }
+            else if (IPAddress.TryParse(targetHost, out _))
+            {
+                // Use an IP address as is
+                return targetHost;
+            }
+            else
+            {
+                // Use 0.0.0.0 if the target host is not a valid IP address or hostname
+                return IPAddress.Any.ToString();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Normalize the target host to a tuple of (address, binding mode). A user may have configured
+    /// an endpoint target host that isn't itself a valid IP address or hostname that can be resolved
+    /// by other services or clients. For example, 0.0.0.0 is considered to mean that the service should
+    /// bind to all IPv4 addresses. When the target host indicates that the service should bind to all
+    /// IPv4 or IPv6 addresses, we instead return "localhost" as the address. The binding mode is metdata
+    /// that indicates whether an endpoint is bound to a single address or some set of multiple addresses
+    /// on the system.
+    /// </summary>
+    /// <param name="targetHost">The target host from an EndpointAnnotation</param>
+    /// <returns>A tuple of (address, binding mode).</returns>
+    private static (string, EndpointBindingMode) NormalizeTargetHost(string targetHost)
+    {
+        return targetHost switch
+        {
+            null or "" => ("localhost", EndpointBindingMode.SingleAddress), // Default is localhost
+            var s when string.Equals(s, "localhost", StringComparison.OrdinalIgnoreCase) => ("localhost", EndpointBindingMode.SingleAddress), // Explicitly set to localhost
+            var s when IPAddress.TryParse(s, out var ipAddress) => ipAddress switch // The host is an IP address
+            {
+                var ip when IPAddress.Any.Equals(ip) => ("localhost", EndpointBindingMode.IPv4AnyAddresses), // 0.0.0.0 (IPv4 all addresses)
+                var ip when IPAddress.IPv6Any.Equals(ip) => ("localhost", EndpointBindingMode.IPv6AnyAddresses), // :: (IPv6 all addreses)
+                _ => (s, EndpointBindingMode.SingleAddress), // Any other IP address is returned as-is
+            },
+            _ => ("localhost", EndpointBindingMode.DualStackAnyAddresses), // Any other target host is treated as binding to all IPv4 AND IPv6 addresses
+        };
     }
 
     private async Task CreateResourcesAsync<RT>(CancellationToken cancellationToken) where RT : CustomResource
@@ -1552,6 +1646,9 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
             {
                 case Container c:
                     await EnsureResourceDeletedAsync<Container>(appResource.DcpResourceName).ConfigureAwait(false);
+
+                    // Ensure we explicitly start the container
+                    c.Spec.Start = true;
 
                     await _executorEvents.PublishAsync(new OnResourceStartingContext(cancellationToken, resourceType, appResource.ModelResource, appResource.DcpResourceName)).ConfigureAwait(false);
                     await CreateContainerAsync(appResource, resourceLogger, cancellationToken).ConfigureAwait(false);
@@ -1772,6 +1869,11 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                 case ProtocolType.Udp:
                     portSpec.Protocol = PortProtocol.UDP;
                     break;
+            }
+
+            if (sp.EndpointAnnotation.TargetHost != "localhost")
+            {
+                portSpec.HostIP = sp.EndpointAnnotation.TargetHost;
             }
 
             ports.Add(portSpec);

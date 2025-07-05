@@ -27,6 +27,10 @@ Or, if you are using Visual Studio:
 1. Set the Startup Project to be the `AppHost` project (it's under `\playground\TestShop`). Make sure the launch profile is set to "http".
 1. <kbd>F5</kbd> to debug, or <kbd>Ctrl+F5</kbd> to launch without debugging.
 
+## Using VS Code
+
+Make sure you [build the repo](#build-the-repo) from command line at least once. Then use `./start-code.sh` (macOS and Linux) or `.\start-code.cmd` to start VS Code.
+
 ## View Dashboard
 
 When you start the sample app in Visual Studio, it will automatically open your browser to show the dashboard.
@@ -47,6 +51,27 @@ injected. An example is below:
 
 Note that injection doesn't happen until a component's `OnInitialized`, so if you are referencing a string from codebehind, you must wait to do that
 until `OnInitialized`.
+
+## Testing
+
+### Running Tests
+
+To run tests, use the build script:
+
+```bash
+./build.sh --test  # Linux/macOS
+./build.cmd --test # Windows
+```
+
+### Quarantined Tests
+
+Flaky tests may be marked as quarantined to prevent them from blocking CI while being investigated and fixed. See [quarantined-tests.md](quarantined-tests.md) for more information on working with quarantined tests.
+
+When running tests locally or in automated environments, use the quarantine filter to exclude known flaky tests:
+
+```bash
+dotnet test --filter-not-trait "quarantined=true"
+```
 
 ## Integrations (Formerly Components)
 
